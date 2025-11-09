@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pydantic
+openai
+redis
+SQLAlchemy>=2.0
+psycopg[binary]
