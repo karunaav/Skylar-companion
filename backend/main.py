@@ -6,9 +6,16 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 
-from openai import RateLimitError, APIError
+# ⛔ Removed OpenAI error imports
+# from openai import RateLimitError, APIError
 
-from llm_client import generate_llm_reply, BASE_SYSTEM_PROMPT, build_messages
+# ✅ Import from your Gemini llm_client
+from llm_client import (
+    generate_llm_reply,
+    BASE_SYSTEM_PROMPT,
+    build_prompt,  # Gemini-style prompt builder
+    client,        # google.genai Client
+)
 from safety import is_crisis_text, crisis_safe_reply, moderate_text
 from redis_client import (
     save_session_meta,
@@ -122,6 +129,7 @@ async def start_session(req: StartSessionRequest):
 async def chat(req: ChatRequest):
     """
     Non-streaming chat endpoint (simple JSON response).
+    Uses generate_llm_reply() which already calls Gemini.
     """
     meta = get_session_meta(req.session_id)
     if not meta:
@@ -156,7 +164,7 @@ async def chat(req: ChatRequest):
         append_history(req.session_id, "assistant", safe_msg)
         return ChatResponse(reply=safe_msg)
 
-    # LLM reply (with internal error handling in generate_llm_reply)
+    # LLM reply (Gemini via generate_llm_reply)
     reply = generate_llm_reply(companion_name, history, user_msg)
     append_history(req.session_id, "assistant", reply)
     return ChatResponse(reply=reply)
@@ -166,10 +174,8 @@ async def chat(req: ChatRequest):
 async def chat_stream(req: ChatRequest):
     """
     Streaming endpoint using Server-Sent Events (SSE).
-    Frontend consumes as incremental tokens for a 'typing' effect'.
+    Now uses Gemini streaming: client.models.generate_content_stream().
     """
-    from llm_client import client  # imported here to avoid circular issues
-
     meta = get_session_meta(req.session_id)
     if not meta:
         raise HTTPException(status_code=404, detail="Session not found. Start a new one.")
@@ -213,8 +219,8 @@ async def chat_stream(req: ChatRequest):
 
         return StreamingResponse(safe_gen(), media_type="text/event-stream")
 
-    # 3) Normal LLM streaming with robust error handling
-    msgs = build_messages(
+    # 3) Normal LLM streaming with Gemini
+    prompt = build_prompt(
         BASE_SYSTEM_PROMPT.format(companion_name=companion_name),
         history,
         user_msg,
@@ -224,18 +230,16 @@ async def chat_stream(req: ChatRequest):
         full_reply = ""
 
         try:
-            stream = client.chat.completions.create(
-                model="gpt-4.1-mini",
-                messages=msgs,
-                temperature=0.8,
-                max_tokens=320,
-                stream=True,
+            # Official streaming pattern with google-genai:
+            # for chunk in client.models.generate_content_stream(...): print(chunk.text) :contentReference[oaicite:2]{index=2}
+            stream = client.models.generate_content_stream(
+                model="gemini-2.5-flash",
+                contents=prompt,
             )
 
             for chunk in stream:
-                delta = chunk.choices[0].delta.content or ""
+                delta = (chunk.text or "").strip()
                 if delta:
-                # send incremental content
                     full_reply += delta
                     yield f"data: {delta}\n\n"
 
@@ -253,27 +257,12 @@ async def chat_stream(req: ChatRequest):
 
             append_history(req.session_id, "assistant", full_reply)
 
-        except RateLimitError:
-            # No quota / billing issue
-            msg = (
-                "Right now I can’t reach my main model because of usage limits 🥲 "
-                "but I’m still here listening."
-            )
-            append_history(req.session_id, "assistant", msg)
-            yield f"data: {msg}\n\n"
-
-        except APIError:
-            msg = (
-                "I ran into a temporary issue talking to my model. "
-                "Let’s try again in a bit 💛"
-            )
-            append_history(req.session_id, "assistant", msg)
-            yield f"data: {msg}\n\n"
-
         except Exception:
+            # We can't distinguish rate limit vs other errors easily here,
+            # so use one gentle fallback.
             msg = (
-                "I got a bit tangled up while responding, "
-                "but I’m still here. Can you resend that for me? 💛"
+                "I ran into an issue talking to my model just now. "
+                "Can we try again in a bit? 💛"
             )
             append_history(req.session_id, "assistant", msg)
             yield f"data: {msg}\n\n"
