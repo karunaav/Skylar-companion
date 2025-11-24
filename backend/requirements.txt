@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 pydantic
-openai
+google-genai
 redis
 SQLAlchemy>=2.0
 psycopg[binary]
