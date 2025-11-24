@@ -1,9 +1,10 @@
 import os
 from typing import List, Dict  # ✅ add this
-from openai import OpenAI, RateLimitError, APIError
+from google import genai
 
-# OpenAI client (reads key from env)
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# GEMINI_API_KEY should be set in your environment (Render dashboard)
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+
 
 BASE_SYSTEM_PROMPT = """
 You are {companion_name}, a soft, glassy, cosmic-themed AI friend.
