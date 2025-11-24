@@ -6,10 +6,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 
-# ⛔ Removed OpenAI error imports
-# from openai import RateLimitError, APIError
 
-# ✅ Import from your Gemini llm_client
 from llm_client import (
     generate_llm_reply,
     BASE_SYSTEM_PROMPT,
