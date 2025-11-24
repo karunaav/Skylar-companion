@@ -1,10 +1,10 @@
 import os
-from typing import List, Dict  # ✅ add this
+from typing import List, Dict
 from google import genai
 
-# GEMINI_API_KEY should be set in your environment (Render dashboard)
+# If GEMINI_API_KEY is set in the environment, you can also just do:
+# client = genai.Client()
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-
 
 BASE_SYSTEM_PROMPT = """
 You are {companion_name}, a soft, glassy, cosmic-themed AI friend.
@@ -47,50 +47,51 @@ Always be clear: you are an AI friend, not a substitute for professional care.
 """
 
 
-def build_messages(system_text: str,
-                   history: List[Dict[str, str]],
-                   user_message: str) -> List[Dict[str, str]]:
-    msgs: List[Dict[str, str]] = [{"role": "system", "content": system_text}]
+def build_prompt(system_text: str,
+                 history: List[Dict[str, str]],
+                 user_message: str) -> str:
+    """
+    Convert system + history + user message into a single text prompt
+    that we send to Gemini via generate_content().
+    """
+    lines: List[str] = []
+    lines.append(system_text.strip())
+    lines.append("")
+    lines.append("Conversation so far:")
 
     # include last 10 exchanges max for context
     for item in history[-10:]:
-        role = "assistant" if item["role"] in ("bot", "assistant") else "user"
-        msgs.append({"role": role, "content": item["content"]})
+        role = item.get("role", "user")
+        speaker = "User" if role == "user" else "Companion"
+        lines.append(f"{speaker}: {item.get('content', '')}")
 
-    msgs.append({"role": "user", "content": user_message})
-    return msgs
+    lines.append(f"User: {user_message}")
+    lines.append("Companion:")
+
+    return "\n".join(lines)
 
 
 def generate_llm_reply(companion_name: str,
                        history: List[Dict[str, str]],
                        user_message: str) -> str:
     system_text = BASE_SYSTEM_PROMPT.format(companion_name=companion_name)
-    messages = build_messages(system_text, history, user_message)
+    prompt = build_prompt(system_text, history, user_message)
 
     try:
-        completion = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=messages,
-            temperature=0.8,
-            max_tokens=320,
+        # Gemini text generation call
+        # Docs pattern: client.models.generate_content(model="gemini-2.5-flash", contents="...") :contentReference[oaicite:0]{index=0}
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
         )
-        reply = completion.choices[0].message.content.strip()
-    except RateLimitError:
-        reply = (
-            "Right now I can’t reach my main model because of usage limits 🥲 "
-            "but I’m still here to listen."
-        )
-    except APIError:
-        reply = (
-            "I ran into a temporary issue talking to my model. "
-            "Can we try again in a bit? 💛"
-        )
+        reply = (response.text or "").strip()
     except Exception:
         reply = (
             "I got a bit tangled while trying to respond, "
             "but I’m still here with you."
         )
 
+    # Make sure the safety disclaimer is present
     if "I’m an AI friend" not in reply and "I'm an AI friend" not in reply:
         reply += (
             "\n\n(I’m an AI friend, not a therapist or doctor, "
