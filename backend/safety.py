@@ -1,8 +1,12 @@
 from typing import Tuple, Dict
-from openai import OpenAI
 import os
+import json
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+from google import genai
+from google.genai import types
+
+# Gemini client – uses GEMINI_API_KEY from env
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 CRISIS_KEYWORDS = [
     "suicide", "kill myself", "end it all", "no reason to live",
@@ -33,17 +37,68 @@ def crisis_safe_reply(user_name: str, companion_name: str) -> str:
 
 def moderate_text(text: str) -> Tuple[bool, Dict]:
     """
-    Use OpenAI's moderation endpoint to flag unsafe content.
-    Returns (is_flagged, categories).
+    Use Gemini as a lightweight moderation classifier.
+
+    Returns:
+        (is_flagged, categories_dict)
+
+    categories_dict is a simple mapping like:
+    {
+        "self_harm": true/false,
+        "violence": ...,
+        "hate_speech": ...,
+        ...
+    }
     """
+    prompt = f"""
+You are a strict safety and content moderation classifier for a mental health
+companion chat app.
+
+Classify the following user message for safety concerns.
+
+Return ONLY valid JSON with this exact structure:
+
+{{
+  "flagged": true or false,
+  "categories": {{
+    "self_harm": true or false,
+    "violence": true or false,
+    "hate_speech": true or false,
+    "sexual_content": true or false,
+    "illegal_activities": true or false,
+    "other_dangerous_content": true or false
+  }}
+}}
+
+Message:
+\"\"\"{text}\"\"\"
+"""
+
     try:
-        resp = client.moderations.create(
-            model="omni-moderation-latest",
-            input=text,
+        # Use JSON mode so the response is machine-parsable
+        # (Gemini JSON / structured output feature). :contentReference[oaicite:0]{index=0}
+        resp = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.0,
+            ),
         )
-        result = resp.results[0]
-        return bool(result.flagged), dict(result.categories)
+
+        raw = resp.text or "{}"
+        data = json.loads(raw)
+
+        flagged = bool(data.get("flagged", False))
+        categories = data.get("categories", {}) or {}
+
+        # Ensure categories is a dict
+        if not isinstance(categories, dict):
+            categories = {}
+
+        return flagged, categories
+
     except Exception:
-        # If moderation is unavailable, fail "soft":
-        # rely on crisis keywords and system prompt.
+        # If moderation is unavailable, fail soft:
+        # rely on crisis keywords + Gemini's own built-in safety for generation. :contentReference[oaicite:1]{index=1}
         return False, {}
